@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Send, Eye, EyeOff, Mail, User, FileText, Pen, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 
 const EmailComposer = () => {
   const [to, setTo] = useState("");
@@ -19,22 +20,17 @@ const EmailComposer = () => {
     setStatus("idle");
 
     try {
-      const res = await fetch("/api/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ to, subject, body, signature }),
+      const { data, error } = await supabase.functions.invoke("send-email", {
+        body: { to, subject, body, signature },
       });
 
-      if (res.ok) {
-        setStatus("success");
-        setTo("");
-        setSubject("");
-        setBody("");
-        setTimeout(() => setStatus("idle"), 4000);
-      } else {
-        setStatus("error");
-        setTimeout(() => setStatus("idle"), 4000);
-      }
+      if (error) throw error;
+
+      setStatus("success");
+      setTo("");
+      setSubject("");
+      setBody("");
+      setTimeout(() => setStatus("idle"), 4000);
     } catch {
       setStatus("error");
       setTimeout(() => setStatus("idle"), 4000);
