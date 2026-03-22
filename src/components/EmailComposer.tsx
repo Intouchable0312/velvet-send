@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Send, Eye, EyeOff, Mail, User, FileText, Pen, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 
 const EmailComposer = () => {
   const [to, setTo] = useState("");
