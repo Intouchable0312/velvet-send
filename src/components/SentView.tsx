@@ -1,18 +1,17 @@
 import { useState, useEffect, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import {
-  Inbox, RefreshCw, ChevronLeft, ChevronRight, Mail, MailOpen,
-  ArrowLeft, Reply, Loader2, AlertCircle, User, Clock,
-  Search, X,
+  MailCheck, RefreshCw, ChevronLeft, ChevronRight, Send,
+  ArrowLeft, Loader2, AlertCircle, User, Clock,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import type { ReplyContext } from "@/pages/Index";
 
 interface EmailSummary {
   uid: number;
   from: string;
   subject: string;
   date: string;
+  to?: string;
   read: boolean;
 }
 
@@ -27,10 +26,6 @@ interface EmailDetail {
   isHtml: boolean;
 }
 
-interface InboxViewProps {
-  onReply: (ctx: ReplyContext) => void;
-}
-
 const PAGE_SIZE = 15;
 
 function formatDate(dateStr: string): string {
@@ -39,12 +34,10 @@ function formatDate(dateStr: string): string {
     const d = new Date(dateStr);
     if (isNaN(d.getTime())) return dateStr;
     const now = new Date();
-    const isToday = d.toDateString() === now.toDateString();
+    if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
     const yesterday = new Date(now);
     yesterday.setDate(yesterday.getDate() - 1);
-    const isYesterday = d.toDateString() === yesterday.toDateString();
-    if (isToday) return d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-    if (isYesterday) return "Hier";
+    if (d.toDateString() === yesterday.toDateString()) return "Hier";
     if (now.getFullYear() === d.getFullYear()) return d.toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
     return d.toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" });
   } catch { return dateStr; }
@@ -71,7 +64,7 @@ function extractEmail(from: string): string {
   return match ? match[1] : from;
 }
 
-const InboxView = ({ onReply }: InboxViewProps) => {
+const SentView = () => {
   const [emails, setEmails] = useState<EmailSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -80,16 +73,13 @@ const InboxView = ({ onReply }: InboxViewProps) => {
   const [selectedEmail, setSelectedEmail] = useState<EmailDetail | null>(null);
   const [loadingEmail, setLoadingEmail] = useState(false);
 
-  const [searchQuery, setSearchQuery] = useState("");
-  const [activeSearch, setActiveSearch] = useState("");
-
-  const fetchEmails = useCallback(async (p: number, search?: string) => {
+  const fetchEmails = useCallback(async (p: number) => {
     setLoading(true);
     setError("");
     try {
-      const body: Record<string, unknown> = { action: "list", page: p, pageSize: PAGE_SIZE };
-      if (search) body.search = search;
-      const { data, error: fnError } = await supabase.functions.invoke("read-emails", { body });
+      const { data, error: fnError } = await supabase.functions.invoke("read-emails", {
+        body: { action: "list", page: p, pageSize: PAGE_SIZE, folder: "sent" },
+      });
       if (fnError) throw fnError;
       if (data.error) throw new Error(data.error);
       setEmails(data.emails || []);
@@ -101,29 +91,17 @@ const InboxView = ({ onReply }: InboxViewProps) => {
     }
   }, []);
 
-  useEffect(() => { fetchEmails(page, activeSearch); }, [page, activeSearch, fetchEmails]);
-
-  const handleSearch = () => {
-    setPage(1);
-    setActiveSearch(searchQuery.trim());
-  };
-
-  const clearSearch = () => {
-    setSearchQuery("");
-    setActiveSearch("");
-    setPage(1);
-  };
+  useEffect(() => { fetchEmails(page); }, [page, fetchEmails]);
 
   const openEmail = async (uid: number) => {
     setLoadingEmail(true);
     try {
       const { data, error: fnError } = await supabase.functions.invoke("read-emails", {
-        body: { action: "read", uid },
+        body: { action: "read", uid, folder: "sent" },
       });
       if (fnError) throw fnError;
       if (data.error) throw new Error(data.error);
       setSelectedEmail(data);
-      setEmails((prev) => prev.map((e) => (e.uid === uid ? { ...e, read: true } : e)));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erreur de lecture");
     } finally {
@@ -131,25 +109,13 @@ const InboxView = ({ onReply }: InboxViewProps) => {
     }
   };
 
-  const handleReplyClick = () => {
-    if (!selectedEmail) return;
-    onReply({
-      to: extractEmail(selectedEmail.from),
-      toName: extractName(selectedEmail.from),
-      subject: selectedEmail.subject,
-    });
-  };
-
   const totalPages = Math.ceil(total / PAGE_SIZE);
-  const unreadCount = emails.filter((e) => !e.read).length;
 
-  // ── Email detail view ──
   if (selectedEmail) {
     return (
       <motion.div
         initial={{ opacity: 0, x: 20 }}
         animate={{ opacity: 1, x: 0 }}
-        exit={{ opacity: 0, x: -20 }}
         className="flex flex-col h-full"
       >
         <div className="flex items-center gap-3 p-4 border-b border-border">
@@ -164,13 +130,9 @@ const InboxView = ({ onReply }: InboxViewProps) => {
               {selectedEmail.subject}
             </h2>
             <p className="text-xs text-muted-foreground truncate">
-              {extractName(selectedEmail.from)} &lt;{extractEmail(selectedEmail.from)}&gt;
+              À : {extractName(selectedEmail.to)} &lt;{extractEmail(selectedEmail.to)}&gt;
             </p>
           </div>
-          <button onClick={handleReplyClick} className="premium-btn text-sm py-2 px-4">
-            <Reply className="w-4 h-4" />
-            <span className="hidden sm:inline">Répondre</span>
-          </button>
         </div>
 
         <div className="px-6 py-4 border-b border-border bg-secondary/20">
@@ -179,8 +141,8 @@ const InboxView = ({ onReply }: InboxViewProps) => {
               <User className="w-5 h-5 text-primary" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="font-medium text-sm text-foreground">{extractName(selectedEmail.from)}</p>
-              <p className="text-xs text-muted-foreground">{extractEmail(selectedEmail.from)}</p>
+              <p className="font-medium text-sm text-foreground">À : {extractName(selectedEmail.to)}</p>
+              <p className="text-xs text-muted-foreground">{extractEmail(selectedEmail.to)}</p>
             </div>
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground shrink-0">
               <Clock className="w-3.5 h-3.5" />
@@ -209,24 +171,18 @@ const InboxView = ({ onReply }: InboxViewProps) => {
     );
   }
 
-  // ── Email list view ──
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between p-4 border-b border-border">
         <div className="flex items-center gap-2">
-          <Inbox className="w-5 h-5 text-primary" />
-          <h2 className="font-display font-bold text-foreground">Boîte de réception</h2>
+          <MailCheck className="w-5 h-5 text-primary" />
+          <h2 className="font-display font-bold text-foreground">Emails envoyés</h2>
           {total > 0 && (
             <span className="text-xs text-muted-foreground bg-secondary px-2 py-0.5 rounded-full">{total}</span>
           )}
-          {unreadCount > 0 && (
-            <span className="text-xs font-bold text-primary-foreground bg-primary px-2 py-0.5 rounded-full">
-              {unreadCount} non lu{unreadCount > 1 ? "s" : ""}
-            </span>
-          )}
         </div>
         <button
-          onClick={() => fetchEmails(page, activeSearch)}
+          onClick={() => fetchEmails(page)}
           disabled={loading}
           className="p-2 rounded-xl text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
         >
@@ -234,56 +190,22 @@ const InboxView = ({ onReply }: InboxViewProps) => {
         </button>
       </div>
 
-      {/* Search bar */}
-      <div className="p-3 border-b border-border">
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-              placeholder="Rechercher par expéditeur, objet ou contenu…"
-              className="premium-input pl-9 pr-9 py-2 text-sm"
-            />
-            {searchQuery && (
-              <button onClick={clearSearch} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
-                <X className="w-4 h-4" />
-              </button>
-            )}
-          </div>
-          <button onClick={handleSearch} className="premium-btn text-sm py-2 px-4">
-            <Search className="w-4 h-4" />
-          </button>
-        </div>
-        {activeSearch && (
-          <div className="flex items-center gap-2 mt-2">
-            <span className="text-xs text-muted-foreground">
-              Résultats pour « {activeSearch} » — {total} trouvé{total > 1 ? "s" : ""}
-            </span>
-            <button onClick={clearSearch} className="text-xs text-primary hover:underline">Effacer</button>
-          </div>
-        )}
-      </div>
-
-      {/* Content */}
       <div className="flex-1 overflow-y-auto">
         {loading && emails.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 gap-3">
             <Loader2 className="w-8 h-8 animate-spin text-primary" />
-            <p className="text-sm text-muted-foreground">Chargement des emails…</p>
+            <p className="text-sm text-muted-foreground">Chargement…</p>
           </div>
         ) : error ? (
           <div className="flex flex-col items-center justify-center py-16 gap-3 px-4">
             <AlertCircle className="w-8 h-8 text-destructive" />
             <p className="text-sm text-destructive text-center">{error}</p>
-            <button onClick={() => fetchEmails(page, activeSearch)} className="premium-btn text-sm py-2 px-4 mt-2">Réessayer</button>
+            <button onClick={() => fetchEmails(page)} className="premium-btn text-sm py-2 px-4 mt-2">Réessayer</button>
           </div>
         ) : emails.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 gap-3">
-            <Inbox className="w-12 h-12 text-muted-foreground/30" />
-            <p className="text-sm text-muted-foreground">{activeSearch ? "Aucun résultat" : "Aucun email"}</p>
+            <Send className="w-12 h-12 text-muted-foreground/30" />
+            <p className="text-sm text-muted-foreground">Aucun email envoyé</p>
           </div>
         ) : (
           <div>
@@ -294,28 +216,19 @@ const InboxView = ({ onReply }: InboxViewProps) => {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.02 }}
                 onClick={() => openEmail(email.uid)}
-                className={`flex items-center gap-3 px-4 py-3 border-b border-border cursor-pointer transition-colors hover:bg-secondary/50 ${!email.read ? "bg-primary/5" : ""}`}
+                className="flex items-center gap-3 px-4 py-3 border-b border-border cursor-pointer transition-colors hover:bg-secondary/50"
               >
-                <div className="shrink-0 relative">
-                  {email.read ? (
-                    <MailOpen className="w-4 h-4 text-muted-foreground/40" />
-                  ) : (
-                    <>
-                      <Mail className="w-4 h-4 text-primary" />
-                      <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-primary" />
-                    </>
-                  )}
+                <div className="shrink-0">
+                  <Send className="w-4 h-4 text-muted-foreground/40" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-baseline gap-2">
-                    <span className={`text-sm truncate ${!email.read ? "font-bold text-foreground" : "text-foreground/80"}`}>
-                      {extractName(email.from)}
+                    <span className="text-sm truncate text-foreground/80">
+                      À : {extractName(email.from)}
                     </span>
                     <span className="text-xs text-muted-foreground shrink-0">{formatDate(email.date)}</span>
                   </div>
-                  <p className={`text-sm truncate ${!email.read ? "font-semibold text-foreground/90" : "text-muted-foreground"}`}>
-                    {email.subject}
-                  </p>
+                  <p className="text-sm truncate text-muted-foreground">{email.subject}</p>
                 </div>
               </motion.div>
             ))}
@@ -346,4 +259,4 @@ const InboxView = ({ onReply }: InboxViewProps) => {
   );
 };
 
-export default InboxView;
+export default SentView;

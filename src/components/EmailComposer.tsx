@@ -1,11 +1,17 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Eye, EyeOff, Mail, User, FileText, CheckCircle2, XCircle, Loader2, BookTemplate } from "lucide-react";
+import { Send, Eye, EyeOff, Mail, User, FileText, CheckCircle2, XCircle, Loader2, BookTemplate, Reply, X } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import RichTextEditor from "./RichTextEditor";
 import TemplateManager from "./TemplateManager";
+import type { ReplyContext } from "@/pages/Index";
 
-const EmailComposer = () => {
+interface EmailComposerProps {
+  replyTo?: ReplyContext | null;
+  onClearReply?: () => void;
+}
+
+const EmailComposer = ({ replyTo, onClearReply }: EmailComposerProps) => {
   const [to, setTo] = useState("");
   const [prenom, setPrenom] = useState("");
   const [subject, setSubject] = useState("");
@@ -15,28 +21,36 @@ const EmailComposer = () => {
   const [status, setStatus] = useState<"idle" | "success" | "error">("idle");
   const [templateOpen, setTemplateOpen] = useState(false);
 
+  // When replyTo changes, prefill fields
+  useEffect(() => {
+    if (replyTo) {
+      setTo(replyTo.to);
+      setPrenom(replyTo.toName);
+      setSubject(replyTo.subject.startsWith("Re:") ? replyTo.subject : `Re: ${replyTo.subject}`);
+      setBodyHtml("<p></p>");
+      setShowPreview(false);
+    }
+  }, [replyTo]);
+
   const bodyText = bodyHtml.replace(/<[^>]*>/g, "").trim();
   const isValid = to.includes("@") && to.includes(".") && subject.trim() && bodyText.length > 0;
-
   const processedHtml = bodyHtml.replace(/\{prenom\}/gi, prenom || "");
 
   const handleSend = async () => {
     if (!isValid) return;
     setSending(true);
     setStatus("idle");
-
     try {
-      const { data, error } = await supabase.functions.invoke("send-email", {
+      const { error } = await supabase.functions.invoke("send-email", {
         body: { to, prenom, subject, bodyHtml: processedHtml },
       });
-
       if (error) throw error;
-
       setStatus("success");
       setTo("");
       setPrenom("");
       setSubject("");
       setBodyHtml("<p></p>");
+      onClearReply?.();
       setTimeout(() => setStatus("idle"), 4000);
     } catch {
       setStatus("error");
@@ -48,6 +62,14 @@ const EmailComposer = () => {
 
   const handleLoadTemplate = (html: string) => {
     setBodyHtml(html);
+  };
+
+  const handleDismissReply = () => {
+    onClearReply?.();
+    setTo("");
+    setPrenom("");
+    setSubject("");
+    setBodyHtml("<p></p>");
   };
 
   return (
@@ -80,6 +102,34 @@ const EmailComposer = () => {
               </div>
             </div>
           </motion.div>
+
+          {/* Reply banner */}
+          <AnimatePresence>
+            {replyTo && (
+              <motion.div
+                initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                className="mb-4 flex items-center gap-3 p-4 rounded-xl bg-primary/5 border border-primary/20"
+              >
+                <Reply className="w-5 h-5 text-primary shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-foreground">
+                    Réponse à {replyTo.toName}
+                  </p>
+                  <p className="text-xs text-muted-foreground truncate">
+                    {replyTo.subject}
+                  </p>
+                </div>
+                <button
+                  onClick={handleDismissReply}
+                  className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* Form */}
           <motion.div
@@ -236,47 +286,34 @@ const EmailComposer = () => {
                     <div><span className="font-medium">À :</span> {to || "—"}</div>
                     <div><span className="font-medium">Objet :</span> {subject || "—"}</div>
                   </div>
-                  {/* Email preview matching VIZION style */}
                   <div className="bg-secondary/30 rounded-xl p-4 sm:p-6">
                     <div className="bg-card rounded-2xl overflow-hidden border border-border" style={{ boxShadow: "var(--shadow-md)" }}>
-                      {/* VIZION Header */}
                       <div className="text-center py-6 px-8">
                         <div className="font-display text-2xl font-extrabold tracking-[4px] text-foreground">
                           VIZION
                         </div>
                       </div>
-                      <div className="mx-8">
-                        <div className="h-px bg-border" />
-                      </div>
-                      {/* Greeting */}
+                      <div className="mx-8"><div className="h-px bg-border" /></div>
                       {prenom && (
                         <div className="px-8 pt-8 pb-2">
-                          <p className="text-base font-bold text-foreground">
-                            Bonjour {prenom},
-                          </p>
+                          <p className="text-base font-bold text-foreground">Bonjour {prenom},</p>
                         </div>
                       )}
-                      {/* Body */}
                       <div className="px-8 py-4">
                         <div
                           className="text-sm text-muted-foreground leading-relaxed [&_strong]:text-foreground [&_strong]:font-bold [&_p]:mb-3 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5"
                           dangerouslySetInnerHTML={{ __html: processedHtml }}
                         />
                       </div>
-                      {/* Signature */}
                       <div className="px-8 pb-8">
                         <p className="text-sm text-foreground leading-relaxed">
                           Bien à toi,<br />
                           <strong>L'équipe VIZION</strong>
                         </p>
                       </div>
-                      <div className="mx-8">
-                        <div className="h-px bg-border" />
-                      </div>
+                      <div className="mx-8"><div className="h-px bg-border" /></div>
                       <div className="text-center py-5 px-8">
-                        <p className="text-xs text-muted-foreground">
-                          VIZION — Collaboration & Partenariats
-                        </p>
+                        <p className="text-xs text-muted-foreground">VIZION — Collaboration & Partenariats</p>
                       </div>
                     </div>
                   </div>
