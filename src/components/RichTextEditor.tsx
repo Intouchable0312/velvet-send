@@ -52,8 +52,9 @@ const RichTextEditor = ({ content, onChange, placeholder }: RichTextEditorProps)
       TextAlign.configure({ types: ["heading", "paragraph"] }),
     ],
     content,
-    onUpdate: ({ editor }) => {
-      onChange(editor.getHTML());
+    onUpdate: ({ editor: e }) => {
+      isInternalUpdate.current = true;
+      onChange(e.getHTML());
     },
     editorProps: {
       attributes: {
