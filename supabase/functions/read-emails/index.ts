@@ -180,12 +180,16 @@ function extractBody(raw: string): { text: string; html: string } {
 
 function processBodyPart(headers: string, body: string): { text: string; html: string } {
   const ct = getContentType(headers)
+  const fullCt = getFullContentTypeHeader(headers)
   const charset = getCharset(headers)
   const encoding = getTransferEncoding(headers)
 
   if (ct.includes('multipart/')) {
-    const boundary = getBoundary(headers)
-    if (!boundary) return { text: body, html: '' }
+    const boundary = getBoundary(fullCt) || getBoundary(headers)
+    if (!boundary) {
+      console.log('No boundary found in:', fullCt.substring(0, 200))
+      return { text: body, html: '' }
+    }
     return parseMultipart(body, boundary)
   }
 
