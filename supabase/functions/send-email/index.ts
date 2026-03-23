@@ -5,6 +5,22 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+function convertToEmailHtml(html: string): string {
+  // Convert Tiptap CSS classes/tags to inline styles for email compatibility
+  return html
+    .replace(/<strong>/g, '<strong style="color:#111111;font-weight:bold;">')
+    .replace(/<em>/g, '<em style="font-style:italic;">')
+    .replace(/<u>/g, '<u style="text-decoration:underline;">')
+    .replace(/<s>/g, '<s style="text-decoration:line-through;">')
+    .replace(/<h2>/g, '<h2 style="font-size:22px;font-weight:700;color:#111111;margin:16px 0 8px 0;">')
+    .replace(/<h2 /g, '<h2 style="font-size:22px;font-weight:700;color:#111111;margin:16px 0 8px 0;" ')
+    .replace(/<p>/g, '<p style="margin:0 0 12px 0;font-size:17px;line-height:1.9;color:#444444;">')
+    .replace(/<p style="/g, '<p style="margin:0 0 12px 0;font-size:17px;line-height:1.9;color:#444444;')
+    .replace(/<ul>/g, '<ul style="margin:8px 0;padding-left:24px;font-size:17px;line-height:1.9;color:#444444;">')
+    .replace(/<ol>/g, '<ol style="margin:8px 0;padding-left:24px;font-size:17px;line-height:1.9;color:#444444;">')
+    .replace(/<li>/g, '<li style="margin:4px 0;">');
+}
+
 function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')
