@@ -148,6 +148,12 @@ function getContentType(headerBlock: string): string {
   return m ? m[1].trim().toLowerCase() : 'text/plain'
 }
 
+function getFullContentTypeHeader(headerBlock: string): string {
+  // Get the full Content-Type header including folded continuation lines
+  const m = headerBlock.match(/^Content-Type:\s*((?:.*(?:\r?\n[ \t].*)*)*)/im)
+  return m ? m[1].replace(/\r?\n[ \t]+/g, ' ').trim() : ''
+}
+
 function getBoundary(headerBlock: string): string | null {
   // Try quoted boundary first, then unquoted
   const quoted = headerBlock.match(/boundary="([^"]+)"/i)
