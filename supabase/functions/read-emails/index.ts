@@ -284,26 +284,21 @@ Deno.serve(async (req) => {
 
     try {
       if (action === 'list') {
-        await imap.sendCommand('SELECT INBOX')
+        const selectResult = await imap.sendCommand(`SELECT ${imapFolder}`)
 
         let uids: number[] = []
 
         if (search && search.trim()) {
-          // Use IMAP SEARCH to find matching emails
           const searchTerm = search.trim().replace(/"/g, '')
           const searchResult = await imap.sendCommand(
             `UID SEARCH OR OR FROM "${searchTerm}" SUBJECT "${searchTerm}" BODY "${searchTerm}"`
           )
-          // Parse UIDs from "* SEARCH uid1 uid2 uid3..."
           const searchLine = searchResult.match(/\*\s+SEARCH\s+([\d\s]+)/i)
           if (searchLine) {
             uids = searchLine[1].trim().split(/\s+/).map(Number).filter(n => !isNaN(n))
           }
-          // Reverse for newest first
           uids.reverse()
         } else {
-          // Get total count
-          const selectResult = await imap.sendCommand('SELECT INBOX')
           const existsMatch = selectResult.match(/\*\s+(\d+)\s+EXISTS/i)
           const totalCount = existsMatch ? parseInt(existsMatch[1]) : 0
 
