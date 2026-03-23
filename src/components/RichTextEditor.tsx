@@ -64,6 +64,15 @@ const RichTextEditor = ({ content, onChange, placeholder }: RichTextEditorProps)
     },
   });
 
+  const isInternalUpdate = useRef(false);
+
+  useEffect(() => {
+    if (editor && !isInternalUpdate.current && content !== editor.getHTML()) {
+      editor.commands.setContent(content, false);
+    }
+    isInternalUpdate.current = false;
+  }, [content, editor]);
+
   if (!editor) return null;
 
   return (
