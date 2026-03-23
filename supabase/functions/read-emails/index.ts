@@ -12,24 +12,18 @@ async function imapConnect(host: string, port: number, username: string, passwor
   let tagCounter = 0
 
   async function readUntilComplete(expectedTag?: string): Promise<string> {
-    const buf = new Uint8Array(65536)
+    const buf = new Uint8Array(131072)
     let result = ''
-    const maxAttempts = 50
+    const maxAttempts = 100
     let attempts = 0
-
     while (attempts < maxAttempts) {
       const n = await conn.read(buf)
       if (n === null) break
       result += decoder.decode(buf.subarray(0, n))
       attempts++
-
       if (expectedTag) {
-        // Check if we have the tagged response (OK, NO, or BAD)
-        if (result.includes(`${expectedTag} OK`) || result.includes(`${expectedTag} NO`) || result.includes(`${expectedTag} BAD`)) {
-          break
-        }
+        if (result.includes(`${expectedTag} OK`) || result.includes(`${expectedTag} NO`) || result.includes(`${expectedTag} BAD`)) break
       } else {
-        // For greeting, just wait for \r\n
         if (result.includes('\r\n')) break
       }
     }
@@ -43,146 +37,213 @@ async function imapConnect(host: string, port: number, username: string, passwor
     return await readUntilComplete(tag)
   }
 
-  // Read greeting
-  const greeting = await readUntilComplete()
-  console.log('IMAP greeting received:', greeting.substring(0, 100))
-
-  // Login — quote credentials to handle special characters
+  await readUntilComplete() // greeting
   const quotedUser = `"${username.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
   const quotedPass = `"${password.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
   const loginResult = await sendCommand(`LOGIN ${quotedUser} ${quotedPass}`)
-  console.log('IMAP login response:', loginResult.substring(0, 200))
-  
   if (loginResult.includes('NO') || loginResult.includes('BAD') || !loginResult.includes('OK')) {
     conn.close()
-    throw new Error('IMAP authentication failed: ' + loginResult.substring(0, 200))
+    throw new Error('IMAP authentication failed')
   }
 
   return { sendCommand, close: () => conn.close() }
 }
 
-function parseEmailHeaders(raw: string): { from: string; subject: string; date: string; messageId: string; to: string } {
-  const getHeader = (name: string): string => {
-    const regex = new RegExp(`^${name}:\\s*(.+?)(?=\\r?\\n[^ \\t]|\\r?\\n\\r?\\n)`, 'ims')
-    const match = raw.match(regex)
-    if (!match) return ''
-    // Unfold headers (join continuation lines)
-    return match[1].replace(/\r?\n[ \t]+/g, ' ').trim()
-  }
+// ── Header parsing ──
 
-  return {
-    from: getHeader('From'),
-    subject: decodeHeader(getHeader('Subject')),
-    date: getHeader('Date'),
-    messageId: getHeader('Message-ID') || getHeader('Message-Id'),
-    to: getHeader('To'),
-  }
-}
-
-function decodeHeader(value: string): string {
+function decodeEncodedWords(value: string): string {
   if (!value) return ''
-  // Decode =?charset?encoding?text?= patterns
-  return value.replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, (_match, charset, encoding, text) => {
+  // Handle consecutive encoded words (remove whitespace between them)
+  let result = value.replace(/\?=\s+=\?/g, '?==?')
+  result = result.replace(/=\?([^?]+)\?([BbQq])\?([^?]*)\?=/g, (_m, charset: string, enc: string, text: string) => {
     try {
-      if (encoding.toUpperCase() === 'B') {
+      if (enc.toUpperCase() === 'B') {
         const bytes = Uint8Array.from(atob(text), c => c.charCodeAt(0))
         return new TextDecoder(charset).decode(bytes)
-      } else if (encoding.toUpperCase() === 'Q') {
-        const decoded = text.replace(/_/g, ' ').replace(/=([0-9A-Fa-f]{2})/g, (_: string, hex: string) =>
-          String.fromCharCode(parseInt(hex, 16))
-        )
-        const bytes = Uint8Array.from(decoded, (c: string) => c.charCodeAt(0))
+      } else {
+        const raw = text.replace(/_/g, ' ').replace(/=([0-9A-Fa-f]{2})/g, (_: string, h: string) =>
+          String.fromCharCode(parseInt(h, 16)))
+        const bytes = Uint8Array.from(raw, (c: string) => c.charCodeAt(0))
         return new TextDecoder(charset).decode(bytes)
       }
-    } catch { /* fallback */ }
-    return text
+    } catch { return text }
   })
+  return result
 }
 
+function getHeader(raw: string, name: string): string {
+  // Match header, handling folded lines (continuation with space/tab)
+  const regex = new RegExp(`^${name}:\\s*((?:.*(?:\\r?\\n[ \\t].*)*)*)`, 'im')
+  const m = raw.match(regex)
+  if (!m) return ''
+  return m[1].replace(/\r?\n[ \t]+/g, ' ').trim()
+}
+
+function parseHeaders(raw: string) {
+  return {
+    from: decodeEncodedWords(getHeader(raw, 'From')),
+    subject: decodeEncodedWords(getHeader(raw, 'Subject')),
+    date: getHeader(raw, 'Date'),
+    messageId: getHeader(raw, 'Message-ID') || getHeader(raw, 'Message-Id'),
+    to: decodeEncodedWords(getHeader(raw, 'To')),
+  }
+}
+
+// ── Content decoding ──
+
+function decodeQuotedPrintable(content: string, charset = 'utf-8'): string {
+  // Remove soft line breaks
+  const joined = content.replace(/=\r?\n/g, '')
+  // Convert =XX sequences to bytes
+  const byteArr: number[] = []
+  let i = 0
+  while (i < joined.length) {
+    if (joined[i] === '=' && i + 2 < joined.length) {
+      const hex = joined.substring(i + 1, i + 3)
+      if (/^[0-9A-Fa-f]{2}$/.test(hex)) {
+        byteArr.push(parseInt(hex, 16))
+        i += 3
+        continue
+      }
+    }
+    byteArr.push(joined.charCodeAt(i))
+    i++
+  }
+  try {
+    return new TextDecoder(charset).decode(new Uint8Array(byteArr))
+  } catch {
+    return new TextDecoder('utf-8').decode(new Uint8Array(byteArr))
+  }
+}
+
+function decodeBase64Content(content: string, charset = 'utf-8'): string {
+  try {
+    const cleaned = content.replace(/[\r\n\s]/g, '')
+    const bytes = Uint8Array.from(atob(cleaned), c => c.charCodeAt(0))
+    return new TextDecoder(charset).decode(bytes)
+  } catch {
+    return content
+  }
+}
+
+function decodeContent(content: string, encoding: string, charset = 'utf-8'): string {
+  const enc = encoding.toLowerCase().trim()
+  if (enc === 'base64') return decodeBase64Content(content, charset)
+  if (enc === 'quoted-printable') return decodeQuotedPrintable(content, charset)
+  return content
+}
+
+function getCharset(headerBlock: string): string {
+  const m = headerBlock.match(/charset="?([^"\s;]+)"?/i)
+  return m ? m[1] : 'utf-8'
+}
+
+function getTransferEncoding(headerBlock: string): string {
+  const m = headerBlock.match(/Content-Transfer-Encoding:\s*([^\r\n]+)/i)
+  return m ? m[1].trim() : '7bit'
+}
+
+function getContentType(headerBlock: string): string {
+  const m = headerBlock.match(/Content-Type:\s*([^;\r\n]+)/i)
+  return m ? m[1].trim().toLowerCase() : 'text/plain'
+}
+
+function getBoundary(headerBlock: string): string | null {
+  const m = headerBlock.match(/boundary="?([^"\r\n;]+)"?/i)
+  return m ? m[1] : null
+}
+
+// ── Multipart parsing ──
+
 function extractBody(raw: string): { text: string; html: string } {
-  // Find the boundary between headers and body
-  const headerBodySplit = raw.indexOf('\r\n\r\n')
-  if (headerBodySplit === -1) return { text: '', html: '' }
+  const splitIdx = raw.indexOf('\r\n\r\n')
+  if (splitIdx === -1) {
+    const splitIdx2 = raw.indexOf('\n\n')
+    if (splitIdx2 === -1) return { text: '', html: '' }
+    const headers = raw.substring(0, splitIdx2)
+    const body = raw.substring(splitIdx2 + 2)
+    return processBodyPart(headers, body)
+  }
+  const headers = raw.substring(0, splitIdx)
+  const body = raw.substring(splitIdx + 4)
+  return processBodyPart(headers, body)
+}
 
-  const headers = raw.substring(0, headerBodySplit)
-  const body = raw.substring(headerBodySplit + 4)
+function processBodyPart(headers: string, body: string): { text: string; html: string } {
+  const ct = getContentType(headers)
+  const charset = getCharset(headers)
+  const encoding = getTransferEncoding(headers)
 
-  // Check content type
-  const ctMatch = headers.match(/Content-Type:\s*([^;\r\n]+)/i)
-  const contentType = ctMatch ? ctMatch[1].trim().toLowerCase() : 'text/plain'
-
-  if (contentType.includes('multipart/')) {
-    // Find boundary
-    const boundaryMatch = headers.match(/boundary="?([^"\r\n;]+)"?/i)
-    if (!boundaryMatch) return { text: body, html: '' }
-    return parseMultipart(body, boundaryMatch[1])
+  if (ct.includes('multipart/')) {
+    const boundary = getBoundary(headers)
+    if (!boundary) return { text: body, html: '' }
+    return parseMultipart(body, boundary)
   }
 
-  // Check transfer encoding
-  const teMatch = headers.match(/Content-Transfer-Encoding:\s*([^\r\n]+)/i)
-  const encoding = teMatch ? teMatch[1].trim().toLowerCase() : '7bit'
-  const decoded = decodeContent(body, encoding)
-
-  if (contentType.includes('text/html')) {
-    return { text: '', html: decoded }
-  }
+  const decoded = decodeContent(body, encoding, charset)
+  if (ct.includes('text/html')) return { text: '', html: decoded }
   return { text: decoded, html: '' }
 }
 
 function parseMultipart(body: string, boundary: string): { text: string; html: string } {
   let text = ''
   let html = ''
-  const parts = body.split(`--${boundary}`)
+
+  // Split on boundary, handling both \r\n-- and \n-- prefixes
+  const delimiter = `--${boundary}`
+  const parts = body.split(delimiter)
 
   for (const part of parts) {
-    if (part.trim() === '--' || part.trim() === '') continue
+    const trimmed = part.trim()
+    if (!trimmed || trimmed === '--') continue
 
-    const partHeaderEnd = part.indexOf('\r\n\r\n')
-    if (partHeaderEnd === -1) continue
+    // Find header/body split
+    let splitIdx = part.indexOf('\r\n\r\n')
+    let bodyStart = 4
+    if (splitIdx === -1) {
+      splitIdx = part.indexOf('\n\n')
+      bodyStart = 2
+    }
+    if (splitIdx === -1) continue
 
-    const partHeaders = part.substring(0, partHeaderEnd)
-    const partBody = part.substring(partHeaderEnd + 4).replace(/\r\n$/, '')
+    const partHeaders = part.substring(0, splitIdx)
+    const partBody = part.substring(splitIdx + bodyStart)
+    // Remove trailing boundary markers
+    const cleanBody = partBody.replace(/\r?\n?$/, '')
 
-    const ctMatch = partHeaders.match(/Content-Type:\s*([^;\r\n]+)/i)
-    const partCt = ctMatch ? ctMatch[1].trim().toLowerCase() : ''
-
-    const teMatch = partHeaders.match(/Content-Transfer-Encoding:\s*([^\r\n]+)/i)
-    const encoding = teMatch ? teMatch[1].trim().toLowerCase() : '7bit'
+    const partCt = getContentType(partHeaders)
 
     if (partCt.includes('multipart/')) {
-      const innerBoundary = partHeaders.match(/boundary="?([^"\r\n;]+)"?/i)
+      const innerBoundary = getBoundary(partHeaders)
       if (innerBoundary) {
-        const inner = parseMultipart(partBody, innerBoundary[1])
-        if (inner.text) text = inner.text
+        const inner = parseMultipart(cleanBody, innerBoundary)
         if (inner.html) html = inner.html
+        if (inner.text && !text) text = inner.text
       }
     } else if (partCt.includes('text/html')) {
-      html = decodeContent(partBody, encoding)
+      html = decodeContent(cleanBody, getTransferEncoding(partHeaders), getCharset(partHeaders))
     } else if (partCt.includes('text/plain')) {
-      text = decodeContent(partBody, encoding)
+      text = decodeContent(cleanBody, getTransferEncoding(partHeaders), getCharset(partHeaders))
     }
   }
 
   return { text, html }
 }
 
-function decodeContent(content: string, encoding: string): string {
-  if (encoding === 'base64') {
-    try {
-      const cleaned = content.replace(/[\r\n\s]/g, '')
-      const bytes = Uint8Array.from(atob(cleaned), c => c.charCodeAt(0))
-      return new TextDecoder('utf-8').decode(bytes)
-    } catch {
-      return content
-    }
-  }
-  if (encoding === 'quoted-printable') {
-    return content
-      .replace(/=\r?\n/g, '')
-      .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-  }
-  return content
+// ── Extract raw email from IMAP FETCH response ──
+
+function extractRawEmail(fetchResult: string): string {
+  // The format is: * N FETCH ... {SIZE}\r\n<raw email bytes>\r\n)\r\nTAG OK
+  const sizeMatch = fetchResult.match(/\{(\d+)\}\r?\n/)
+  if (!sizeMatch) return fetchResult
+
+  const size = parseInt(sizeMatch[1])
+  const startIdx = fetchResult.indexOf(sizeMatch[0]) + sizeMatch[0].length
+  // Use declared size to extract exactly the email content
+  return fetchResult.substring(startIdx, startIdx + size)
 }
+
+// ── Main handler ──
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -190,7 +251,7 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { action, uid, page = 1, pageSize = 20 } = await req.json()
+    const { action, uid, page = 1, pageSize = 20, search } = await req.json()
 
     const gmailAddress = Deno.env.get('GMAIL_ADDRESS')
     const gmailPassword = Deno.env.get('GMAIL_APP_PASSWORD')
@@ -206,61 +267,90 @@ Deno.serve(async (req) => {
 
     try {
       if (action === 'list') {
-        // Select INBOX
-        const selectResult = await imap.sendCommand('SELECT INBOX')
-        const existsMatch = selectResult.match(/\*\s+(\d+)\s+EXISTS/i)
-        const totalCount = existsMatch ? parseInt(existsMatch[1]) : 0
+        await imap.sendCommand('SELECT INBOX')
 
-        if (totalCount === 0) {
+        let uids: number[] = []
+
+        if (search && search.trim()) {
+          // Use IMAP SEARCH to find matching emails
+          const searchTerm = search.trim().replace(/"/g, '')
+          const searchResult = await imap.sendCommand(
+            `UID SEARCH OR OR FROM "${searchTerm}" SUBJECT "${searchTerm}" BODY "${searchTerm}"`
+          )
+          // Parse UIDs from "* SEARCH uid1 uid2 uid3..."
+          const searchLine = searchResult.match(/\*\s+SEARCH\s+([\d\s]+)/i)
+          if (searchLine) {
+            uids = searchLine[1].trim().split(/\s+/).map(Number).filter(n => !isNaN(n))
+          }
+          // Reverse for newest first
+          uids.reverse()
+        } else {
+          // Get total count
+          const selectResult = await imap.sendCommand('SELECT INBOX')
+          const existsMatch = selectResult.match(/\*\s+(\d+)\s+EXISTS/i)
+          const totalCount = existsMatch ? parseInt(existsMatch[1]) : 0
+
+          if (totalCount === 0) {
+            return new Response(
+              JSON.stringify({ emails: [], total: 0 }),
+              { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            )
+          }
+
+          // Get all UIDs to paginate properly
+          const uidResult = await imap.sendCommand('UID SEARCH ALL')
+          const uidLine = uidResult.match(/\*\s+SEARCH\s+([\d\s]+)/i)
+          if (uidLine) {
+            uids = uidLine[1].trim().split(/\s+/).map(Number).filter(n => !isNaN(n))
+          }
+          uids.reverse() // newest first
+        }
+
+        const total = uids.length
+        const startIdx = (page - 1) * pageSize
+        const pageUids = uids.slice(startIdx, startIdx + pageSize)
+
+        if (pageUids.length === 0) {
+          await imap.sendCommand('LOGOUT')
           return new Response(
-            JSON.stringify({ emails: [], total: 0 }),
+            JSON.stringify({ emails: [], total }),
             { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           )
         }
 
-        // Calculate range for pagination (newest first)
-        const start = Math.max(1, totalCount - (page * pageSize) + 1)
-        const end = Math.max(1, totalCount - ((page - 1) * pageSize))
-
-        if (start > end) {
-          return new Response(
-            JSON.stringify({ emails: [], total: totalCount }),
-            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          )
-        }
-
-        // Fetch headers only for the range
+        // Fetch headers for these UIDs
+        const uidSet = pageUids.join(',')
         const fetchResult = await imap.sendCommand(
-          `FETCH ${start}:${end} (UID FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID TO)])`
+          `UID FETCH ${uidSet} (UID FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID TO)])`
         )
 
-        // Parse the fetch results
         const emails: Array<{
-          uid: number
-          from: string
-          subject: string
-          date: string
-          read: boolean
+          uid: number; from: string; subject: string; date: string; read: boolean
         }> = []
 
-        // Split by "* N FETCH" pattern
+        // Parse fetch results
         const fetchParts = fetchResult.split(/\*\s+\d+\s+FETCH/i)
-
         for (const part of fetchParts) {
           if (!part.trim()) continue
-
           const uidMatch = part.match(/UID\s+(\d+)/i)
           const flagsMatch = part.match(/FLAGS\s+\(([^)]*)\)/i)
-
           if (!uidMatch) continue
 
           const emailUid = parseInt(uidMatch[1])
           const flags = flagsMatch ? flagsMatch[1] : ''
           const isRead = flags.includes('\\Seen')
 
-          // Extract header content between the { } block
-          const headerContent = part.replace(/^[^{]*\{\d+\}\r?\n/, '').replace(/\)\r?\n.*$/s, '')
-          const headers = parseEmailHeaders(headerContent)
+          // Extract header block after {SIZE}
+          const headerStart = part.match(/\{\d+\}\r?\n/)
+          if (!headerStart) continue
+          const headerIdx = part.indexOf(headerStart[0]) + headerStart[0].length
+          // Get content up to the closing paren
+          let headerContent = part.substring(headerIdx)
+          // Remove trailing ) and anything after
+          const closeParen = headerContent.lastIndexOf(')')
+          if (closeParen > 0) headerContent = headerContent.substring(0, closeParen)
+
+          const headers = parseHeaders(headerContent)
 
           emails.push({
             uid: emailUid,
@@ -271,13 +361,12 @@ Deno.serve(async (req) => {
           })
         }
 
-        // Reverse so newest is first
-        emails.reverse()
+        // Sort by UID descending (newest first)
+        emails.sort((a, b) => b.uid - a.uid)
 
         await imap.sendCommand('LOGOUT')
-
         return new Response(
-          JSON.stringify({ emails, total: totalCount }),
+          JSON.stringify({ emails, total }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         )
 
@@ -290,22 +379,9 @@ Deno.serve(async (req) => {
         }
 
         await imap.sendCommand('SELECT INBOX')
-
-        // Fetch full email by UID
         const fetchResult = await imap.sendCommand(`UID FETCH ${uid} (BODY[])`)
-
-        // Extract the raw email content
-        const sizeMatch = fetchResult.match(/\{(\d+)\}\r?\n/)
-        let rawEmail = ''
-        if (sizeMatch) {
-          const startIdx = fetchResult.indexOf(sizeMatch[0]) + sizeMatch[0].length
-          rawEmail = fetchResult.substring(startIdx)
-          // Remove trailing IMAP response
-          const lastParen = rawEmail.lastIndexOf(')')
-          if (lastParen > 0) rawEmail = rawEmail.substring(0, lastParen)
-        }
-
-        const headers = parseEmailHeaders(rawEmail)
+        const rawEmail = extractRawEmail(fetchResult)
+        const headers = parseHeaders(rawEmail)
         const body = extractBody(rawEmail)
 
         // Mark as read
@@ -334,8 +410,8 @@ Deno.serve(async (req) => {
       )
 
     } catch (innerError) {
-      try { await imap.sendCommand('LOGOUT') } catch { /* ignore */ }
-      try { imap.close() } catch { /* ignore */ }
+      try { await imap.sendCommand('LOGOUT') } catch { /* */ }
+      try { imap.close() } catch { /* */ }
       throw innerError
     }
 
