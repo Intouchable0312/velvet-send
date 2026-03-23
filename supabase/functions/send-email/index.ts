@@ -5,6 +5,22 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+function convertToEmailHtml(html: string): string {
+  // Convert Tiptap CSS classes/tags to inline styles for email compatibility
+  return html
+    .replace(/<strong>/g, '<strong style="color:#111111;font-weight:bold;">')
+    .replace(/<em>/g, '<em style="font-style:italic;">')
+    .replace(/<u>/g, '<u style="text-decoration:underline;">')
+    .replace(/<s>/g, '<s style="text-decoration:line-through;">')
+    .replace(/<h2>/g, '<h2 style="font-size:22px;font-weight:700;color:#111111;margin:16px 0 8px 0;">')
+    .replace(/<h2 /g, '<h2 style="font-size:22px;font-weight:700;color:#111111;margin:16px 0 8px 0;" ')
+    .replace(/<p>/g, '<p style="margin:0 0 12px 0;font-size:17px;line-height:1.9;color:#444444;">')
+    .replace(/<p style="/g, '<p style="margin:0 0 12px 0;font-size:17px;line-height:1.9;color:#444444;')
+    .replace(/<ul>/g, '<ul style="margin:8px 0;padding-left:24px;font-size:17px;line-height:1.9;color:#444444;">')
+    .replace(/<ol>/g, '<ol style="margin:8px 0;padding-left:24px;font-size:17px;line-height:1.9;color:#444444;">')
+    .replace(/<li>/g, '<li style="margin:4px 0;">');
+}
+
 function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')
@@ -58,6 +74,10 @@ async function sendViaSMTP(
   const boundary = `b_${crypto.randomUUID().replace(/-/g, '')}`
   const encodedSubject = `=?UTF-8?B?${btoa(unescape(encodeURIComponent(subject)))}?=`
 
+  const plainText = html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ')
+  const htmlBase64 = btoa(unescape(encodeURIComponent(html)))
+  const plainBase64 = btoa(unescape(encodeURIComponent(plainText)))
+
   const mime = [
     `From: VIZION <${from}>`,
     `To: ${to}`,
@@ -67,15 +87,15 @@ async function sendViaSMTP(
     ``,
     `--${boundary}`,
     `Content-Type: text/plain; charset=UTF-8`,
-    `Content-Transfer-Encoding: quoted-printable`,
+    `Content-Transfer-Encoding: base64`,
     ``,
-    html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
+    plainBase64,
     ``,
     `--${boundary}`,
     `Content-Type: text/html; charset=UTF-8`,
-    `Content-Transfer-Encoding: quoted-printable`,
+    `Content-Transfer-Encoding: base64`,
     ``,
-    html,
+    htmlBase64,
     ``,
     `--${boundary}--`,
   ].join('\r\n')
@@ -124,6 +144,7 @@ Deno.serve(async (req) => {
     }
 
     const escapedPrenom = prenom ? escapeHtml(prenom) : ''
+    const emailBody = convertToEmailHtml(bodyHtml)
 
     const html = `<!DOCTYPE html>
 <html>
@@ -149,8 +170,8 @@ Deno.serve(async (req) => {
             </td>
           </tr>` : ''}
           <tr>
-            <td style="padding:${escapedPrenom ? '0' : '42px'} 48px 18px 48px;">
-              <div style="font-size:17px;line-height:1.9;color:#444444;">${bodyHtml}</div>
+            <td style="${escapedPrenom ? 'padding:0 48px 18px 48px;' : 'padding:42px 48px 18px 48px;'}">
+              ${emailBody}
             </td>
           </tr>
           <tr>

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Underline from "@tiptap/extension-underline";
@@ -51,8 +52,9 @@ const RichTextEditor = ({ content, onChange, placeholder }: RichTextEditorProps)
       TextAlign.configure({ types: ["heading", "paragraph"] }),
     ],
     content,
-    onUpdate: ({ editor }) => {
-      onChange(editor.getHTML());
+    onUpdate: ({ editor: e }) => {
+      isInternalUpdate.current = true;
+      onChange(e.getHTML());
     },
     editorProps: {
       attributes: {
@@ -62,6 +64,15 @@ const RichTextEditor = ({ content, onChange, placeholder }: RichTextEditorProps)
       },
     },
   });
+
+  const isInternalUpdate = useRef(false);
+
+  useEffect(() => {
+    if (editor && !isInternalUpdate.current && content !== editor.getHTML()) {
+      editor.commands.setContent(content, { emitUpdate: false });
+    }
+    isInternalUpdate.current = false;
+  }, [content, editor]);
 
   if (!editor) return null;
 
