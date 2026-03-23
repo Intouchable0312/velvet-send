@@ -229,19 +229,20 @@ function parseMultipart(body: string, boundary: string): { text: string; html: s
     // Remove trailing boundary markers
     const cleanBody = partBody.replace(/\r?\n?$/, '')
 
-    const partCt = getContentType(partHeaders)
+    const partFullCt = getFullContentTypeHeader(partHeaders)
+    const partCtLower = partFullCt.toLowerCase()
 
-    if (partCt.includes('multipart/')) {
-      const innerBoundary = getBoundary(partHeaders)
+    if (partCtLower.includes('multipart/')) {
+      const innerBoundary = getBoundary(partFullCt)
       if (innerBoundary) {
         const inner = parseMultipart(cleanBody, innerBoundary)
         if (inner.html) html = inner.html
         if (inner.text && !text) text = inner.text
       }
-    } else if (partCt.includes('text/html')) {
-      html = decodeContent(cleanBody, getTransferEncoding(partHeaders), getCharset(partHeaders))
-    } else if (partCt.includes('text/plain')) {
-      text = decodeContent(cleanBody, getTransferEncoding(partHeaders), getCharset(partHeaders))
+    } else if (partCtLower.includes('text/html')) {
+      html = decodeContent(cleanBody, getTransferEncoding(partHeaders), getCharset(partFullCt || partHeaders))
+    } else if (partCtLower.includes('text/plain')) {
+      text = decodeContent(cleanBody, getTransferEncoding(partHeaders), getCharset(partFullCt || partHeaders))
     }
   }
 
