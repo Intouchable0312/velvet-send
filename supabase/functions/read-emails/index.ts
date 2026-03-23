@@ -184,22 +184,22 @@ function extractBody(raw: string): { text: string; html: string } {
 }
 
 function processBodyPart(headers: string, body: string): { text: string; html: string } {
-  const ct = getContentType(headers)
   const fullCt = getFullContentTypeHeader(headers)
-  const charset = getCharset(headers)
+  const ctLower = fullCt.toLowerCase()
+  const charset = getCharset(fullCt || headers)
   const encoding = getTransferEncoding(headers)
 
-  if (ct.includes('multipart/')) {
-    const boundary = getBoundary(fullCt) || getBoundary(headers)
+  if (ctLower.includes('multipart/')) {
+    const boundary = getBoundary(fullCt)
     if (!boundary) {
-      console.log('No boundary found in:', fullCt.substring(0, 200))
+      console.log('No boundary in:', fullCt.substring(0, 200))
       return { text: body, html: '' }
     }
     return parseMultipart(body, boundary)
   }
 
   const decoded = decodeContent(body, encoding, charset)
-  if (ct.includes('text/html')) return { text: '', html: decoded }
+  if (ctLower.includes('text/html')) return { text: '', html: decoded }
   return { text: decoded, html: '' }
 }
 
