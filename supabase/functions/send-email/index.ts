@@ -74,6 +74,10 @@ async function sendViaSMTP(
   const boundary = `b_${crypto.randomUUID().replace(/-/g, '')}`
   const encodedSubject = `=?UTF-8?B?${btoa(unescape(encodeURIComponent(subject)))}?=`
 
+  const plainText = html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ')
+  const htmlBase64 = btoa(unescape(encodeURIComponent(html)))
+  const plainBase64 = btoa(unescape(encodeURIComponent(plainText)))
+
   const mime = [
     `From: VIZION <${from}>`,
     `To: ${to}`,
@@ -83,15 +87,15 @@ async function sendViaSMTP(
     ``,
     `--${boundary}`,
     `Content-Type: text/plain; charset=UTF-8`,
-    `Content-Transfer-Encoding: quoted-printable`,
+    `Content-Transfer-Encoding: base64`,
     ``,
-    html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' '),
+    plainBase64,
     ``,
     `--${boundary}`,
     `Content-Type: text/html; charset=UTF-8`,
-    `Content-Transfer-Encoding: quoted-printable`,
+    `Content-Transfer-Encoding: base64`,
     ``,
-    html,
+    htmlBase64,
     ``,
     `--${boundary}--`,
   ].join('\r\n')
