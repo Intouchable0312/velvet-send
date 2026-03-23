@@ -69,7 +69,7 @@ const RichTextEditor = ({ content, onChange, placeholder }: RichTextEditorProps)
 
   useEffect(() => {
     if (editor && !isInternalUpdate.current && content !== editor.getHTML()) {
-      editor.commands.setContent(content, false);
+      editor.commands.setContent(content, { emitUpdate: false });
     }
     isInternalUpdate.current = false;
   }, [content, editor]);
