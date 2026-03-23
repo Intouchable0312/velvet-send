@@ -144,6 +144,7 @@ Deno.serve(async (req) => {
     }
 
     const escapedPrenom = prenom ? escapeHtml(prenom) : ''
+    const emailBody = convertToEmailHtml(bodyHtml)
 
     const html = `<!DOCTYPE html>
 <html>
@@ -169,8 +170,8 @@ Deno.serve(async (req) => {
             </td>
           </tr>` : ''}
           <tr>
-            <td style="padding:${escapedPrenom ? '0' : '42px'} 48px 18px 48px;">
-              <div style="font-size:17px;line-height:1.9;color:#444444;">${bodyHtml}</div>
+            <td style="${escapedPrenom ? 'padding:0 48px 18px 48px;' : 'padding:42px 48px 18px 48px;'}">
+              ${emailBody}
             </td>
           </tr>
           <tr>
