@@ -44,13 +44,18 @@ async function imapConnect(host: string, port: number, username: string, passwor
   }
 
   // Read greeting
-  await readUntilComplete()
+  const greeting = await readUntilComplete()
+  console.log('IMAP greeting received:', greeting.substring(0, 100))
 
-  // Login
-  const loginResult = await sendCommand(`LOGIN ${username} ${password}`)
-  if (!loginResult.includes('OK')) {
+  // Login — quote credentials to handle special characters
+  const quotedUser = `"${username.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+  const quotedPass = `"${password.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+  const loginResult = await sendCommand(`LOGIN ${quotedUser} ${quotedPass}`)
+  console.log('IMAP login response:', loginResult.substring(0, 200))
+  
+  if (loginResult.includes('NO') || loginResult.includes('BAD') || !loginResult.includes('OK')) {
     conn.close()
-    throw new Error('IMAP authentication failed')
+    throw new Error('IMAP authentication failed: ' + loginResult.substring(0, 200))
   }
 
   return { sendCommand, close: () => conn.close() }
