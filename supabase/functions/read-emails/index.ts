@@ -175,11 +175,6 @@ function extractBody(raw: string): { text: string; html: string } {
   }
   const headers = raw.substring(0, splitIdx)
   const body = raw.substring(splitIdx + 4)
-  const ct = getContentType(headers)
-  const fullCt = getFullContentTypeHeader(headers)
-  console.log('TOP CT:', ct)
-  console.log('FULL CT:', fullCt.substring(0, 300))
-  console.log('BODY START:', body.substring(0, 100))
   return processBodyPart(headers, body)
 }
 
