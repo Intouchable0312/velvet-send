@@ -390,7 +390,7 @@ Deno.serve(async (req) => {
           )
         }
 
-        await imap.sendCommand('SELECT INBOX')
+        await imap.sendCommand(`SELECT ${imapFolder}`)
         const fetchResult = await imap.sendCommand(`UID FETCH ${uid} (BODY[])`)
         const rawEmail = extractRawEmail(fetchResult)
         const headers = parseHeaders(rawEmail)
