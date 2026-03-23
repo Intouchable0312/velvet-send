@@ -8,24 +8,49 @@ const corsHeaders = {
 async function imapConnect(host: string, port: number, username: string, password: string) {
   const conn = await Deno.connectTls({ hostname: host, port })
   const encoder = new TextEncoder()
-  const decoder = new TextDecoder()
   let tagCounter = 0
 
   async function readUntilComplete(expectedTag?: string): Promise<string> {
-    const buf = new Uint8Array(131072)
-    let result = ''
-    const maxAttempts = 100
+    const buf = new Uint8Array(262144)
+    // Accumulate raw bytes to avoid splitting multi-byte UTF-8 chars across reads
+    const chunks: Uint8Array[] = []
+    let totalLen = 0
+    const maxAttempts = 150
     let attempts = 0
+
     while (attempts < maxAttempts) {
       const n = await conn.read(buf)
       if (n === null) break
-      result += decoder.decode(buf.subarray(0, n))
+      const chunk = buf.slice(0, n)
+      chunks.push(chunk)
+      totalLen += n
       attempts++
+
+      // Check completion using a quick ASCII scan of last chunk + tail
+      // We only need to check the tag markers which are ASCII
+      const tail = new TextDecoder('ascii', { fatal: false }).decode(chunk)
       if (expectedTag) {
-        if (result.includes(`${expectedTag} OK`) || result.includes(`${expectedTag} NO`) || result.includes(`${expectedTag} BAD`)) break
+        // Also check accumulated data for tags that span chunks
+        const fullTail = totalLen > 8192
+          ? tail
+          : new TextDecoder('ascii', { fatal: false }).decode(concatBytes(chunks, totalLen))
+        if (fullTail.includes(`${expectedTag} OK`) || fullTail.includes(`${expectedTag} NO`) || fullTail.includes(`${expectedTag} BAD`)) break
       } else {
-        if (result.includes('\r\n')) break
+        if (tail.includes('\r\n')) break
       }
+    }
+
+    // Decode all bytes at once to preserve multi-byte UTF-8
+    const all = concatBytes(chunks, totalLen)
+    return new TextDecoder('utf-8', { fatal: false }).decode(all)
+  }
+
+  function concatBytes(arrays: Uint8Array[], totalLen: number): Uint8Array {
+    const result = new Uint8Array(totalLen)
+    let offset = 0
+    for (const arr of arrays) {
+      result.set(arr, offset)
+      offset += arr.length
     }
     return result
   }
