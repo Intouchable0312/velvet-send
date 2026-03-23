@@ -149,8 +149,11 @@ function getContentType(headerBlock: string): string {
 }
 
 function getBoundary(headerBlock: string): string | null {
-  const m = headerBlock.match(/boundary="?([^"\r\n;]+)"?/i)
-  return m ? m[1] : null
+  // Try quoted boundary first, then unquoted
+  const quoted = headerBlock.match(/boundary="([^"]+)"/i)
+  if (quoted) return quoted[1]
+  const unquoted = headerBlock.match(/boundary=([^\s;\r\n]+)/i)
+  return unquoted ? unquoted[1] : null
 }
 
 // ── Multipart parsing ──
