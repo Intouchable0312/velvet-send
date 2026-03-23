@@ -265,7 +265,10 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { action, uid, page = 1, pageSize = 20, search } = await req.json()
+    const { action, uid, page = 1, pageSize = 20, search, folder } = await req.json()
+
+    // Determine IMAP folder
+    const imapFolder = folder === 'sent' ? '"[Gmail]/Sent Mail"' : 'INBOX'
 
     const gmailAddress = Deno.env.get('GMAIL_ADDRESS')
     const gmailPassword = Deno.env.get('GMAIL_APP_PASSWORD')
