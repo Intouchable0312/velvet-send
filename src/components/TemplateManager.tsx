@@ -1,28 +1,15 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, FileText, Trash2, X, Save } from "lucide-react";
+import { Plus, FileText, Trash2, X, Save, Loader2 } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 import RichTextEditor from "./RichTextEditor";
 
 export interface EmailTemplate {
   id: string;
   name: string;
   html: string;
-  createdAt: number;
-}
-
-const STORAGE_KEY = "vizion-email-templates";
-
-export function loadTemplates(): EmailTemplate[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveTemplates(templates: EmailTemplate[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(templates));
+  created_at: string;
 }
 
 interface TemplateManagerProps {
@@ -32,31 +19,63 @@ interface TemplateManagerProps {
 }
 
 const TemplateManager = ({ open, onClose, onLoadTemplate }: TemplateManagerProps) => {
-  const [templates, setTemplates] = useState<EmailTemplate[]>(loadTemplates);
+  const [templates, setTemplates] = useState<EmailTemplate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newHtml, setNewHtml] = useState("<p></p>");
 
-  const handleSave = () => {
-    if (!newName.trim()) return;
-    const template: EmailTemplate = {
-      id: crypto.randomUUID(),
-      name: newName.trim(),
-      html: newHtml,
-      createdAt: Date.now(),
-    };
-    const updated = [template, ...templates];
-    setTemplates(updated);
-    saveTemplates(updated);
-    setCreating(false);
-    setNewName("");
-    setNewHtml("<p></p>");
+  const fetchTemplates = async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("templates")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      toast.error("Erreur lors du chargement des templates");
+      console.error(error);
+    } else {
+      setTemplates(data as EmailTemplate[]);
+    }
+    setLoading(false);
   };
 
-  const handleDelete = (id: string) => {
-    const updated = templates.filter((t) => t.id !== id);
-    setTemplates(updated);
-    saveTemplates(updated);
+  useEffect(() => {
+    if (open) fetchTemplates();
+  }, [open]);
+
+  const handleSave = async () => {
+    if (!newName.trim()) return;
+    setSaving(true);
+    const { data, error } = await supabase
+      .from("templates")
+      .insert({ name: newName.trim(), html: newHtml })
+      .select()
+      .single();
+
+    if (error) {
+      toast.error("Erreur lors de l'enregistrement");
+      console.error(error);
+    } else {
+      setTemplates([data as EmailTemplate, ...templates]);
+      setCreating(false);
+      setNewName("");
+      setNewHtml("<p></p>");
+      toast.success("Template enregistré !");
+    }
+    setSaving(false);
+  };
+
+  const handleDelete = async (id: string) => {
+    const { error } = await supabase.from("templates").delete().eq("id", id);
+    if (error) {
+      toast.error("Erreur lors de la suppression");
+      console.error(error);
+    } else {
+      setTemplates(templates.filter((t) => t.id !== id));
+    }
   };
 
   const handleLoad = (template: EmailTemplate) => {
@@ -136,8 +155,12 @@ const TemplateManager = ({ open, onClose, onLoadTemplate }: TemplateManagerProps
                       placeholder="Rédigez votre template ici... Utilisez {prenom} pour insérer le prénom dynamiquement."
                     />
                     <div className="flex gap-2">
-                      <button onClick={handleSave} disabled={!newName.trim()} className="premium-btn text-sm py-2 px-4">
-                        <Save className="w-4 h-4" />
+                      <button
+                        onClick={handleSave}
+                        disabled={!newName.trim() || saving}
+                        className="premium-btn text-sm py-2 px-4"
+                      >
+                        {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                         Enregistrer
                       </button>
                       <button
@@ -156,7 +179,11 @@ const TemplateManager = ({ open, onClose, onLoadTemplate }: TemplateManagerProps
             </AnimatePresence>
 
             {/* Templates list */}
-            {templates.length === 0 && !creating ? (
+            {loading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+              </div>
+            ) : templates.length === 0 && !creating ? (
               <div className="text-center py-12">
                 <FileText className="w-12 h-12 text-muted-foreground/30 mx-auto mb-3" />
                 <p className="text-muted-foreground text-sm">Aucun template pour l'instant</p>
@@ -181,7 +208,7 @@ const TemplateManager = ({ open, onClose, onLoadTemplate }: TemplateManagerProps
                           {template.name}
                         </h3>
                         <p className="text-muted-foreground text-xs mt-1">
-                          {new Date(template.createdAt).toLocaleDateString("fr-FR", {
+                          {new Date(template.created_at).toLocaleDateString("fr-FR", {
                             day: "numeric",
                             month: "long",
                             year: "numeric",
